@@ -86,7 +86,10 @@ class DataLoader:
 
     @staticmethod
     def _parse_skill(key, d):
-        job_limit = [s.strip() for s in (d.get("job_limit") or "").split(",") if s.strip()]
+        _jl = d.get("job_limit") or ""
+        if isinstance(_jl, (list, tuple)):
+            _jl = ",".join(str(s) for s in _jl)
+        job_limit = [s.strip() for s in _jl.split(",") if s.strip()]
         stat_req_raw = d.get("stat_req", {}) or {}
         stat_req = {k: int(v) for k, v in stat_req_raw.items()} if isinstance(stat_req_raw, dict) else {}
         return Skill(d["name"], d["desc"], d["skill_type"], d["power"],
