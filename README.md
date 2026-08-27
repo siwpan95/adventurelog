@@ -1,45 +1,26 @@
-# adventurelog
+# 探险日志（log）— Auto Exploration Idle RPG
 
-#### 介绍
-探险日志
+tkinter 挂机放置 RPG：数据驱动（职业 / 技能 / 装备 / 怪物 / 地下城），支持 Excel / JSON 数据加载与自动挂机。
 
-#### 软件架构
-软件架构说明
+## 语言 / 类型
+Python 3 / tkinter GUI 游戏
 
+## 目录要点
+- `main.py` —— 游戏入口（GUI）
+- `core/` —— 游戏引擎（战斗、状态机、自动挂机等）
+- `gui/` —— 界面（多标签页：酒馆 / 商店 / 仓库 / 野外）
+- `data/`、`config/` —— 游戏数据与配置
+- `gen_excel.py` —— 从 JSON 生成 Excel 配置模板（需 `openpyxl`）
+- `demo_capture.py` —— 自动截图脚本（GUI）
+- `promo_video_gen_v6.py` —— 宣传视频生成脚本
+- `探险日志_宣传视频.mp4`、`探险日志_项目评估.md`、`log.txt`、`探险日志.spec`
 
-#### 安装教程
+## 运行方式
+```bash
+python main.py
+```
+依赖：tkinter（标准库）；`Pillow`（部分脚本）；`openpyxl`（仅 `gen_excel.py`）。
 
-1.  xxxx
-2.  xxxx
-3.  xxxx
-
-#### 使用说明
-
-1.  xxxx
-2.  xxxx
-3.  xxxx
-
-#### 参与贡献
-
-1.  Fork 本仓库
-2.  新建 Feat_xxx 分支
-3.  提交代码
-4.  新建 Pull Request
-
-
-#### 特技
-
-1.  使用 Readme\_XXX.md 来支持不同的语言，例如 Readme\_en.md, Readme\_zh.md
-2.  Gitee 官方博客 [blog.gitee.com](https://blog.gitee.com)
-3.  你可以 [https://gitee.com/explore](https://gitee.com/explore) 这个地址来了解 Gitee 上的优秀开源项目
-4.  [GVP](https://gitee.com/gvp) 全称是 Gitee 最有价值开源项目，是综合评定出的优秀开源项目
-5.  Gitee 官方提供的使用手册 [https://gitee.com/help](https://gitee.com/help)
-6.  Gitee 封面人物是一档用来展示 Gitee 会员风采的栏目 [https://gitee.com/gitee-stars/](https://gitee.com/gitee-stars/)
-
-
----
-
-## 仓库索引标注（2026-08-25 · siwpan 统一治理）
-
-> 本地已删（2026-08-25 挂机族去重；本仓库为唯一留存，勿删）。
-> 本标注为发布面统一追加，不改变原有内容。
+## 测试状态
+- `py_compile` 语法检查：通过（27 个 .py 文件）
+- GUI 类，未运行（避免弹窗）

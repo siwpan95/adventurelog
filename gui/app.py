@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""主应用 GUI — Progress Quest 风格地牢探索 + 系统托盘"""
+"""主应用 GUI — Progress Quest 风格地牢探索 + 嵌入式自动化管线"""
 
 import sys
 import tkinter as tk
@@ -8,6 +8,7 @@ import time
 import random
 import threading
 import os
+from datetime import datetime
 from PIL import Image, ImageDraw
 
 from core.config import (
@@ -15,7 +16,8 @@ from core.config import (
     C_BG, C_PANEL_BG, C_CONTENT_BG, C_GOLD, C_ACCENT_TEAL, C_ACCENT_RED,
     C_TEXT, C_TEXT_LIGHT, C_TEXT_HINT,
     C_BTN_NORMAL, C_BTN_HOVER, C_BTN_TEXT, C_BTN_DANGER, C_BTN_DANGER_TEXT,
-    C_BTN_PRIMARY, C_BTN_PRIMARY_TEXT, C_TAB_BAR_BG, C_TAB_ACTIVE, C_TAB_INACTIVE,
+    C_BTN_PRIMARY, C_BTN_PRIMARY_TEXT,
+    C_TAB_BAR_BG, C_TAB_ACTIVE, C_TAB_INACTIVE,
     C_TAB_ACTIVE_TEXT,
     FONT_TITLE, FONT_LABEL, FONT_SMALL, FONT_TINY, FONT_TAB, FONT_NARRATIVE,
     NARRATIVE_INTERVAL,
@@ -29,6 +31,7 @@ from gui.tabs.wilderness_tab import WildernessTabMixin
 from gui.tabs.inn_tab import InnTabMixin
 from gui.tabs.shop_tab import ShopTabMixin
 from gui.tabs.warehouse_tab import WarehouseTabMixin
+from gui.auto_panel import AutoStatusMixin
 
 # pystray 延迟导入
 pystray = None
@@ -40,10 +43,29 @@ except ImportError:
 
 TAB_NAMES = ["酒馆", "郊外", "旅店", "商店", "仓库"]
 
+# ---- 文件日志配置 ----
+_LOG_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+LOG_FILE = os.path.join(_LOG_DIR, "log.txt")
+_MAX_LOG_SIZE = 5 * 1024 * 1024  # 5MB 轮转
+
+def _write_file_log(line: str):
+    """写入文件日志，超 5MB 自动轮转"""
+    try:
+        if os.path.exists(LOG_FILE) and os.path.getsize(LOG_FILE) > _MAX_LOG_SIZE:
+            bak = LOG_FILE + ".old"
+            if os.path.exists(bak):
+                os.remove(bak)
+            os.rename(LOG_FILE, bak)
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
+
 
 class ExplorationApp(TavernTabMixin, WildernessTabMixin,
-                     InnTabMixin, ShopTabMixin, WarehouseTabMixin):
-    """主应用 — 标签页式 RPG，支持系统托盘"""
+                     InnTabMixin, ShopTabMixin, WarehouseTabMixin,
+                     AutoStatusMixin):
+    """主应用 — 标签页式 RPG + 嵌入式自动化管线面板"""
 
     def __init__(self):
         self.root = tk.Tk()
@@ -61,10 +83,11 @@ class ExplorationApp(TavernTabMixin, WildernessTabMixin,
             except Exception:
                 pass
 
-        self.root.geometry(f"{WIN_W}x{WIN_H}")
+        # 窗口尺寸加大以容纳侧边栏
+        self.root.geometry(f"{WIN_W + 140}x{WIN_H}")
         self.root.configure(bg=C_BG)
         self.root.resizable(True, True)
-        self.root.minsize(700, 520)
+        self.root.minsize(840, 520)
 
         self.engine = GameEngine()
         self.game_loop = GameLoop(self.root, self.engine)
@@ -72,12 +95,15 @@ class ExplorationApp(TavernTabMixin, WildernessTabMixin,
         self._active_tab = "酒馆"
         self._tab_labels = {}
         self._tab_indicators = {}
-        self._after_ids = []           # 向后兼容，逐步迁移到 game_loop
+        self._after_ids = []
         self._floor_choice_visible = False
         self._tray_icon = None
         self._tray_thread = None
         self._narrative_idx = 0
         self._narrative_lines = []
+
+        self.stat_var = tk.StringVar(value="击杀: 0 | 宝物: 0 | 事件: 0 | 金币: 0")
+        self.gold_var = tk.StringVar(value="💰 100 G")
 
         self._build_ui()
         self.root.bind("<Unmap>", self._on_unmap)
@@ -140,6 +166,8 @@ class ExplorationApp(TavernTabMixin, WildernessTabMixin,
     def _on_close(self):
         if not messagebox.askyesno("退出确认", "确定要退出游戏吗？\n未保存的进度将丢失。"):
             return
+        if hasattr(self, 'auto_engine') and self.auto_engine:
+            self.auto_engine.stop()
         self.engine.save()
         if self._tray_icon:
             try:
@@ -155,6 +183,13 @@ class ExplorationApp(TavernTabMixin, WildernessTabMixin,
 
     # ==================== 整体布局 ====================
     def _build_ui(self):
+        # --- 先创建自动化控制按钮（供标题栏使用）---
+        try:
+            self._build_auto_controls()
+        except Exception:
+            self._ctrl_frame = None
+            _write_file_log("[WARN] _build_auto_controls() 失败，控制按钮不可用")
+
         # --- 顶部标题栏 ---
         title_bar = tk.Frame(self.root, bg=C_PANEL_BG, height=44)
         title_bar.pack(fill=tk.X)
@@ -165,7 +200,11 @@ class ExplorationApp(TavernTabMixin, WildernessTabMixin,
 
         self.gold_var = tk.StringVar(value="💰 100 G")
         tk.Label(title_bar, textvariable=self.gold_var, font=FONT_LABEL,
-                 bg=C_PANEL_BG, fg=C_GOLD).pack(side=tk.RIGHT, padx=16, pady=6)
+                 bg=C_PANEL_BG, fg=C_GOLD).pack(side=tk.LEFT, padx=16, pady=6)
+
+        # ---- 将自动化控制按钮嵌入标题栏右侧 ----
+        if self._ctrl_frame is not None:
+            self._ctrl_frame.pack(side=tk.RIGHT, padx=(0, 12), pady=6)
 
         # --- 标签栏 ---
         tab_bar = tk.Frame(self.root, bg=C_TAB_BAR_BG, height=38)
@@ -195,53 +234,56 @@ class ExplorationApp(TavernTabMixin, WildernessTabMixin,
 
         self._tab_content = {}
         self._build_tavern_tab()
-        self._build_outskirts_tab()       # 来自 WildernessTabMixin
+        self._build_outskirts_tab()
         self._build_inn_tab()
         self._build_shop_tab()
         self._build_warehouse_tab()
 
+        # --- 构建嵌入式自动化面板（侧边栏+底部增强状态栏）---
+        self._build_auto_status_panel()
+
         # --- 底部叙事滚动字幕 ---
         narration_bar = tk.Frame(self.root, bg=C_PANEL_BG, height=42)
         narration_bar.pack(fill=tk.X, side=tk.BOTTOM)
-        # 不用 pack_propagate(False)，让 Canvas 按字体实际大小自然撑开
 
         self.narration_canvas = tk.Canvas(narration_bar, bg=C_PANEL_BG,
                                            height=42, highlightthickness=0, bd=0)
         self.narration_canvas.pack(fill=tk.BOTH, expand=True)
         self._narration_scroll_id = None
 
-        # --- 底部状态条 ---
-        bottom_bar = tk.Frame(self.root, bg="#E0D5C0", height=32)
-        bottom_bar.pack(fill=tk.X, side=tk.BOTTOM)
-        bottom_bar.pack_propagate(False)
-
-        self.stat_var = tk.StringVar(value="击杀: 0  |  宝物: 0  |  事件: 0  |  金币: 100")
-        tk.Label(bottom_bar, textvariable=self.stat_var, font=FONT_TINY,
-                 bg="#E0D5C0", fg=C_TEXT_HINT).pack(side=tk.LEFT, padx=12)
-
-        if pystray:
-            tk.Label(bottom_bar, text="最小化→托盘  |  右键托盘图标恢复",
-                     font=("Microsoft YaHei", 7), bg="#E0D5C0",
-                     fg=C_TEXT_HINT).pack(side=tk.RIGHT, padx=12)
-
         if pystray:
             self._create_tray_icon()
 
-    # ==================== 冒险日志 (共享方法，被多个标签页使用) ====================
+    # ==================== 冒险日志 (共享方法) ====================
     def _log(self, msg: str, tag: str = None):
         self.engine.battle_log.append(msg)
         if len(self.engine.battle_log) > self.engine.max_log_lines:
             self.engine.battle_log = self.engine.battle_log[-self.engine.max_log_lines:]
 
-        self.log_text.configure(state=tk.NORMAL)
         ts = time.strftime("%H:%M:%S")
-        self.log_text.insert(tk.END, f"[{ts}] ", "timestamp")
+        line = f"[{ts}] {msg}"
         if tag:
-            self.log_text.insert(tk.END, f"{msg}\n", tag)
-        else:
-            self.log_text.insert(tk.END, f"{msg}\n")
-        self.log_text.see(tk.END)
-        self.log_text.configure(state=tk.DISABLED)
+            line = f"[{ts}] [{tag}] {msg}"
+
+        # 写入内存日志控件（如果有）
+        if hasattr(self, 'log_text') and self.log_text is not None:
+            try:
+                self.log_text.configure(state=tk.NORMAL)
+                self.log_text.insert(tk.END, f"[{ts}] ", "timestamp")
+                if tag:
+                    self.log_text.insert(tk.END, f"{msg}\n", tag)
+                else:
+                    self.log_text.insert(tk.END, f"{msg}\n")
+                self.log_text.see(tk.END)
+                self.log_text.configure(state=tk.DISABLED)
+            except Exception:
+                pass
+
+        # 写入文件日志
+        try:
+            _write_file_log(line)
+        except Exception:
+            pass
 
     # ==================== 叙事滚动字幕 ====================
     def _start_narrative(self):
@@ -280,7 +322,7 @@ class ExplorationApp(TavernTabMixin, WildernessTabMixin,
         text = self._narrative_lines[self._narrative_idx]
         self._narrative_idx = (self._narrative_idx + 1) % len(self._narrative_lines)
         if self._narrative_idx == 0:
-            random.shuffle(self._narrative_lines)  # 每轮结束重新洗牌
+            random.shuffle(self._narrative_lines)
 
         cw = self.narration_canvas.winfo_width()
         if cw < 50:
@@ -288,7 +330,7 @@ class ExplorationApp(TavernTabMixin, WildernessTabMixin,
 
         ch = self.narration_canvas.winfo_height()
         if ch < 10:
-            ch = 42  # Canvas 未渲染时 winfo_height() 返回 1，兜底用设计高度
+            ch = 42
 
         self.narration_canvas.delete("narrative")
 
@@ -306,13 +348,13 @@ class ExplorationApp(TavernTabMixin, WildernessTabMixin,
         interval = 25
         total_steps = max(1, int(total_distance / speed))
 
-        self._narration_scroll_step = 0
+        self._narrative_scroll_step = 0
 
         def _animate():
-            self._narration_scroll_step += 1
+            self._narrative_scroll_step += 1
             self.narration_canvas.move("narrative", -speed, 0)
 
-            if self._narration_scroll_step >= total_steps:
+            if self._narrative_scroll_step >= total_steps:
                 self.narration_canvas.delete("narrative")
                 self._narration_scroll_id = self.root.after(
                     600, self._scroll_narrative)
@@ -322,7 +364,7 @@ class ExplorationApp(TavernTabMixin, WildernessTabMixin,
         _animate()
 
     def _set_narrative(self, text: str):
-        """临时设置叙事文字（立即显示并开始滚动）"""
+        """临时设置叙事文字"""
         if self._narration_scroll_id:
             self.root.after_cancel(self._narration_scroll_id)
             self._narration_scroll_id = None
@@ -333,7 +375,7 @@ class ExplorationApp(TavernTabMixin, WildernessTabMixin,
 
         ch = self.narration_canvas.winfo_height()
         if ch < 10:
-            ch = 42  # Canvas 未渲染时兜底
+            ch = 42
 
         self.narration_canvas.delete("narrative")
 
@@ -351,13 +393,13 @@ class ExplorationApp(TavernTabMixin, WildernessTabMixin,
         interval = 25
         total_steps = max(1, int(total_distance / speed))
 
-        self._narration_scroll_step = 0
+        self._narrative_scroll_step = 0
 
         def _animate_temp():
-            self._narration_scroll_step += 1
+            self._narrative_scroll_step += 1
             self.narration_canvas.move("narrative", -speed, 0)
 
-            if self._narration_scroll_step >= total_steps:
+            if self._narrative_scroll_step >= total_steps:
                 self._narration_scroll_id = self.root.after(
                     400, self._scroll_narrative)
             else:
