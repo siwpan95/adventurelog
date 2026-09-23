@@ -1,5 +1,7 @@
 # 探险日志（log）— Auto Exploration Idle RPG
 
+> 仓库：<https://gitee.com/siwpan/adventurelog> ｜ 许可：MIT-0（MIT No Attribution）（见 [LICENSE](LICENSE)）
+
 tkinter 挂机放置 RPG：数据驱动（职业 / 技能 / 装备 / 怪物 / 地下城），支持 Excel / JSON 数据加载与自动挂机。
 
 ## 语言 / 类型
